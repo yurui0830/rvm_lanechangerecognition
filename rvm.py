@@ -1,5 +1,6 @@
 from skrvm import RVR
 from rvm_model import Base_RVM
+from rvm_model_upgrade import OneClass_RVM
 import numpy as np
 from concatenate_features import create_clip_extract_features
 

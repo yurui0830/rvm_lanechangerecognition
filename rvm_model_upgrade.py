@@ -1,4 +1,5 @@
 import numpy as np
+from numpy import linalg as la
 from sklearn.metrics.pairwise import pairwise_kernels
 from random import randint
 
@@ -13,7 +14,7 @@ matric = ‘rbf’, ‘sigmoid’, ‘polynomial’, ‘poly’, ‘linear’, �
 """
 
 
-class Base_RVM(BaseEstimator, RegressorMixin):
+class OneClass_RVM(BaseEstimator, RegressorMixin):
 
     """
     1 The Relevance Vector Machine
@@ -32,7 +33,7 @@ class Base_RVM(BaseEstimator, RegressorMixin):
         kernel='linear',  # kernel type
         max_iter=3000,  # maximum iteration times
         tol=1e-3,  # convergence criterion
-        alpha=1e-6,  # initial alpha
+        alpha=1e9,  # initial alpha
         threshold_alpha=1e5,  # alpha will be kept if below this threshold
         beta=1e-6,  # initial beta
         verbose=False
@@ -97,50 +98,44 @@ class Base_RVM(BaseEstimator, RegressorMixin):
     def fit(self, X, y):
         """Fit the RVR to the training data."""
 
-        X, y = check_X_y(X, y)
+        x, t = check_X_y(X, y)
         # obtain n,d from training set
         n_samples, n_features = X.shape
         # original Phi: ndarray n*n
-        self.phi = self._apply_kernel(X, X)
+        self.phi = self._apply_kernel(x, x)
         # number of basic functions, equal to the number of the rows (m) in Phi
         n_basis_functions = self.phi.shape[0]
 
-        self.relevance_ = X
-        self.y = y
+        self.relevance_ = x
+        self.y = t
         # initialize alpha, beta, means and record current alpha
         self.alpha_ = self.alpha * np.ones(n_basis_functions,)
         self.beta_ = self.beta
         self.mean_ = np.zeros(n_basis_functions,)
         self.alpha_old = self.alpha_
 
-        # loop
+    # Algorithm II: Fast Marginal Likelihood Maximisation for Sparse Bayesian Models, M.Tipping
+        # pick a sample, initialize hyper-parameters
+        # P7 Equation(26): initialize model with a single sample and set a[i]
+        # randomly find a single sample i
+        i = randint(self.n_sample)
+        self.alpha_[i] = la.norm(self.phi[i])**2/((la.norm(self.phi[i] * self.y)/la.norm(self.phi[i]))**2-1/self.beta_)
+
+        # initialize a quantity C parameter
+        quantity_c = np.ones((self.n_sample, self.n_sample))
+        # initialize a zero array for theta
+        theta = np.zeros((self.n_sample,))
+        # P4 Equation 16: initialize theta
+        theta[i] = np.linalg.norm(self.kernel[i] * self.y.T) / (self.n_class * np.square(self.kernel[i]).sum())
+
+        # record active samples
+        active_sample = [i]
+
         for i in range(self.n_iter):
-            # update Sigma and mean
-            self._posterior()
+            quantity_c = np.diag(1/self.beta_) + self.phi[active_sample].T*self.
 
-        # algorithm I: The Relevance Vector Machine, M.Tipping
-            # P654 Equation(9)
-            self.gamma = 1 - self.alpha_*np.diag(self.sigma_)
-            self.alpha_ = np.divide(self.gamma, self.mean_ ** 2)
-            # P654 Equation(6)(10)
-            self.beta_ = (n_samples - np.sum(self.gamma))/((y - np.dot(self.phi.T, self.mean_) ** 2).sum())
 
-            # prune basic vectors
-            self._prune()
-            if self.verbose:
-                print("Iteration: {}".format(i))
-                print("Alpha: {}".format(self.alpha_))
-                print("Beta: {}".format(self.beta_))
-                print("Gamma: {}".format(self.gamma))
-                print("m: {}".format(self.mean_))
-                print("Relevance Vectors: {}".format(self.relevance_.shape[0]))
-            # convergence criterion
-            delta = np.amax(np.absolute(self.alpha_ - self.alpha_old))
-            if delta < self.tol and i > 1:
-                break
-            self.alpha_old = self.alpha_
 
-        print(self.alpha_, self.beta_)
         # return value
         return self
 
@@ -155,27 +150,6 @@ class Base_RVM(BaseEstimator, RegressorMixin):
         return y
 
 
-"""
-
-        # pick a sample, initialize hyper-parameters
-        # initialize Y to follow target labels t
-        self.t = target
-        #self.y =
-        # P3 Equation 15: initialize model with a single sample and set a[i]
-        # randomly find a single sample i
-        i = randint(self.n_sample)
-        self.a[i] = np.square(self.kernel[i]).sum() / \
-                    (np.square(self.kernel[i]*self.t).sum() / np.square(self.kernel[i]).sum() - 1)
-        # initialize a quantity C parameter
-        quantity_c = np.ones((self.n_sample, self.n_sample))
-        # initialize a zero array for theta
-        theta = np.zeros((self.n_sample,))
-        # P4 Equation 16: initialize theta
-        theta[i] = np.linalg.norm(self.kernel[i] * self.y.T) / (self.n_class * np.square(self.kernel[i]).sum())
-        # record active samples
-        active_sample = [i]
-
-"""
 
 class mRVM(Base_RVM):
     """
