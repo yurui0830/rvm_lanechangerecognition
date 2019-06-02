@@ -37,6 +37,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
         self.n_iter = max_iter
         self.tol = tol
         self.beta = beta
+        self.alpha, self.alpha_, self.beta_, self.relevance, self.phi, self.phi_, self.mean_, self.sigma_ = [None]*8
 
     def get_params(self, deep=True):
         """Return parameters as a dictionary."""
@@ -62,7 +63,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def _posterior(self):
         """Compute the posterior distribution (Sigma and weight) over weights."""
         # P3 Equation(6)
-        quantity = np.diag(self.alpha) + self.beta_ * np.matmul(self.phi, self.phi.T)  # phi: ndarray m*n
+        quantity = np.diag(self.alpha) + self.beta_ * (self.phi @ self.phi.T)  # phi: ndarray m*n
         # sigma_: ndarray m*m; mean_: ndarray m*1
         self.sigma_ = np.linalg.inv(quantity)
         self.mean_ = self.beta_ * np.dot(self.sigma_, np.dot(self.phi, self.y))
@@ -83,16 +84,14 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     # Algorithm II: Fast Marginal Likelihood Maximisation for Sparse Bayesian Models, M.Tipping
         # P7 Equation(26): initialize model with a single sample and set a[i]
         # randomly find a single sample i
-        i = randint(n_samples)
-        self.alpha_[i] = norm(self.phi_[i])**2/((norm(self.phi_[i] * self.y)/norm(self.phi_[i]))**2-1/self.beta_)
+        i = np.argmax(norm(np.dot(self.phi_, self.y))/norm(np.sum(self.phi_, 1)))
+        # i = randint(n_samples)
+        self.alpha_[i] = norm(self.phi_[i])**2/((norm(self.phi_[i]*self.y)/norm(self.phi_[i]))**2-1/self.beta_)
         # record active samples and the number of active samples
         active_sample = np.zeros((n_samples,), dtype=bool)
         active_sample[i] = True
         self.alpha = self.alpha_[active_sample]
         self.phi = self.phi_[active_sample]
-
-        # P4 Equation 16: initialize theta
-        #theta[i] = np.linalg.norm(self.kernel[i] * self.y.T) / (self.n_class * np.square(self.kernel[i]).sum())
 
         # loop
         for loop in range(self.n_iter):
@@ -100,7 +99,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
             B = np.zeros((n_samples, n_samples))
             np.fill_diagonal(B, 1/self.beta_)
             A = np.diag(self.alpha)
-            quantity_c = B + np.matmul(np.matmul(self.phi.T, A), self.phi)
+            quantity_c = B + self.phi.T @ A @ self.phi
 
             # find a sample among non-active samples (selected sample is not included in C)
             s = np.zeros((n_samples, 1))
@@ -110,8 +109,8 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 if ~active_sample[i]:
                     # P5 Equation(19): compute s_i and q_i
                     # P7 Step(5): compute theta_i
-                    s[i] = np.dot(np.matmul(self.phi_[i], np.linalg.inv(quantity_c)), self.phi_[i])
-                    q[i] = np.dot(np.matmul(self.phi_[i], np.linalg.inv(quantity_c)), self.y)
+                    s[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.phi_[i]
+                    q[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.y
                     theta[i] = q[i]**2 - s[i]
                 else:
                     continue
@@ -131,20 +130,37 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 self._posterior()
                 # P7 Step(9): update beta
                 self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
-                             norm(self.y - np.matmul(self.phi.T, self.mean_))**2
+                             norm(self.y - self.phi.T @ self.mean_)**2
             else:
+                # if there is no useful samples, throw an exception and quit this training
                 if loop == 0:
-                    i = randint(n_samples)
-                    self.alpha_ = np.full((n_samples,), 1e9)
-                    self.alpha_[i] = norm(self.phi_[i])**2 / \
-                                     ((norm(self.phi_[i]*self.y)/norm(self.phi_[i]))**2-1/self.beta_)
-                    active_sample = np.zeros((n_samples,), dtype=bool)
-                    active_sample[i] = True
+                    print('unsolved problem')
+                    exit()
+                else:
+                    B = np.zeros((n_samples, n_samples))
+                    np.fill_diagonal(B, 1 / self.beta_)
+                    A = np.diag(self.alpha)
+                    quantity_c = B + self.phi.T @ A @ self.phi
+                    s = np.zeros((n_samples, 1))
+                    q = np.zeros((n_samples, 1))
+                    theta = np.zeros((n_samples, 1))
+                    for i in range(n_samples):
+                        if active_sample[i]:
+                            # P5 Equation(19): compute s_i and q_i
+                            # P7 Step(5): compute theta_i
+                            s[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.phi_[i]
+                            q[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.y
+                            theta[i] = q[i] ** 2 - s[i]
+                        else:
+                            continue
+                    delete_sample = np.argwhere(theta < 0)
+                    active_sample[delete_sample] = False
+                    print('sample deleted:', delete_sample)
                     self.alpha = self.alpha_[active_sample]
                     self.phi = self.phi_[active_sample]
-                else:
+                    self.relevance = x[active_sample]
+                    self._posterior()
                     print(self.alpha)
-                    print('terminal loop:', loop)
                     break
 
         # return value

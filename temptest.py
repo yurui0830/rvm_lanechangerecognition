@@ -1,6 +1,5 @@
 import numpy as np
 
-a = np.ones((10,))
-print(a)
-a = np.zeros((9,))
-print(a)
+theta = np.zeros((10, 1))
+delete_sample = np.argwhere(theta < 0)
+print(delete_sample)
