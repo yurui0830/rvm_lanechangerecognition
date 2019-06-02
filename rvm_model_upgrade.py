@@ -102,9 +102,9 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
             quantity_c = B + self.phi.T @ A @ self.phi
 
             # find a sample among non-active samples (selected sample is not included in C)
-            s = np.zeros((n_samples, 1))
-            q = np.zeros((n_samples, 1))
-            theta = np.zeros((n_samples, 1))
+            s = np.zeros((n_samples,))
+            q = np.zeros((n_samples,))
+            theta = np.zeros((n_samples,))
             for i in range(n_samples):
                 if ~active_sample[i]:
                     # P5 Equation(19): compute s_i and q_i
@@ -115,6 +115,8 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 else:
                     continue
             # select the one which has the highest theta (contribution)
+            """
+            # add samples one by one
             if np.max(theta) > 0:
                 # update active samples
                 next_sample = np.argmax(theta)
@@ -131,36 +133,55 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 # P7 Step(9): update beta
                 self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
                              norm(self.y - self.phi.T @ self.mean_)**2
+            """
+            add_sample = np.argwhere(theta > 2e-1)
+            if add_sample.size:
+                # update active samples
+                active_sample[add_sample] = True
+                n_basis_functions = np.sum(active_sample)
+                print('add samples,', n_basis_functions)
+                self.phi = self.phi_[active_sample]
+                self.relevance = x[active_sample]
+                # update alpha and beta
+                # P5 Equation(20): update alpha
+                self.alpha_[add_sample] = s[add_sample]**2 / (q[add_sample]**2 - s[add_sample])
+                self.alpha = self.alpha_[active_sample]
+                # update Sigma and mean
+                self._posterior()
+                # P7 Step(9): update beta
+                self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
+                             norm(self.y - self.phi.T @ self.mean_) ** 2
             else:
-                # if there is no useful samples, throw an exception and quit this training
-                if loop == 0:
-                    print('unsolved problem')
-                    exit()
-                else:
-                    B = np.zeros((n_samples, n_samples))
-                    np.fill_diagonal(B, 1 / self.beta_)
-                    A = np.diag(self.alpha)
-                    quantity_c = B + self.phi.T @ A @ self.phi
-                    s = np.zeros((n_samples, 1))
-                    q = np.zeros((n_samples, 1))
-                    theta = np.zeros((n_samples, 1))
-                    for i in range(n_samples):
-                        if active_sample[i]:
-                            # P5 Equation(19): compute s_i and q_i
-                            # P7 Step(5): compute theta_i
-                            s[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.phi_[i]
-                            q[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.y
-                            theta[i] = q[i] ** 2 - s[i]
-                        else:
-                            continue
-                    delete_sample = np.argwhere(theta < 0)
+                B = np.zeros((n_samples, n_samples))
+                np.fill_diagonal(B, 1 / self.beta_)
+                A = np.diag(self.alpha)
+                quantity_c = B + self.phi.T @ A @ self.phi
+                s = np.zeros((n_samples, 1))
+                q = np.zeros((n_samples, 1))
+                theta = np.zeros((n_samples, 1))
+                for i in range(n_samples):
+                    if active_sample[i]:
+                        # P5 Equation(19): compute s_i and q_i
+                        # P7 Step(5): compute theta_i
+                        s[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.phi_[i]
+                        q[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.y
+                        theta[i] = q[i] ** 2 - s[i]
+                    else:
+                        continue
+                delete_sample = np.argwhere(theta < -2e-1)
+                if delete_sample.size:
                     active_sample[delete_sample] = False
-                    print('sample deleted:', delete_sample)
+                    n_basis_functions = np.sum(active_sample)
+                    print('delete samples,', n_basis_functions)
                     self.alpha = self.alpha_[active_sample]
                     self.phi = self.phi_[active_sample]
                     self.relevance = x[active_sample]
                     self._posterior()
+                    self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
+                                 norm(self.y - self.phi.T @ self.mean_) ** 2
+                else:
                     print(self.alpha)
+                    print(self.beta_)
                     break
 
         # return value
