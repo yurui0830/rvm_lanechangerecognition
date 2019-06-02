@@ -1,7 +1,7 @@
 import numpy as np
-from numpy import linalg as la
+from numpy.linalg import norm
 from sklearn.metrics.pairwise import pairwise_kernels
-from random import randint
+from numpy.random import randint
 
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_X_y
@@ -17,11 +17,8 @@ matric = ‘rbf’, ‘sigmoid’, ‘polynomial’, ‘poly’, ‘linear’, �
 class OneClass_RVM(BaseEstimator, RegressorMixin):
 
     """
-    1 The Relevance Vector Machine
-      M. E. Tipping
-
-    2 Fast Marginal Likelihood Maximisation for Sparsity Bayesian Models
-      M. E. Tipping and A. C. Faul, 2003
+    Fast Marginal Likelihood Maximisation for Sparsity Bayesian Models
+    M. E. Tipping and A. C. Faul, 2003
 
     :param:
 
@@ -31,21 +28,15 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         kernel='linear',  # kernel type
-        max_iter=3000,  # maximum iteration times
+        max_iter=1000,  # maximum iteration times
         tol=1e-3,  # convergence criterion
-        alpha=1e9,  # initial alpha
-        threshold_alpha=1e5,  # alpha will be kept if below this threshold
         beta=1e-6,  # initial beta
-        verbose=False
     ):
         """Copy params to object properties, no validation."""
         self.kernel = kernel
         self.n_iter = max_iter
         self.tol = tol
-        self.alpha = alpha
-        self.threshold_alpha = threshold_alpha
         self.beta = beta
-        self.verbose = verbose
 
     def get_params(self, deep=True):
         """Return parameters as a dictionary."""
@@ -53,10 +44,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
             'kernel': self.kernel,
             'max_iter': self.max_iter,
             'tol': self.tol,
-            'alpha': self.alpha,
-            'threshold_alpha': self.threshold_alpha,
             'beta': self.beta,
-            'verbose': self.verbose
         }
         return params
 
@@ -74,26 +62,10 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def _posterior(self):
         """Compute the posterior distribution (Sigma and weight) over weights."""
         # P3 Equation(6)
-        quantity = np.diag(self.alpha_) + self.beta_ * np.dot(self.phi, self.phi.T)  # phi: ndarray m*n
+        quantity = np.diag(self.alpha) + self.beta_ * np.matmul(self.phi, self.phi.T)  # phi: ndarray m*n
         # sigma_: ndarray m*m; mean_: ndarray m*1
         self.sigma_ = np.linalg.inv(quantity)
         self.mean_ = self.beta_ * np.dot(self.sigma_, np.dot(self.phi, self.y))
-
-    def _prune(self):
-        """Remove basis functions based on alpha values."""
-        # if alpha is smaller than the threshold, keep the alpha (the basic vector)
-        keep_alpha = self.alpha_ < self.threshold_alpha
-        # ensure at least one basic vector is reserved
-        if not np.any(keep_alpha):
-            keep_alpha[0] = True
-        # update relevance vectors/new alpha/current alpha for next loop/gamma/phi/sigma/mean according to keep_alpha
-        self.relevance_ = self.relevance_[keep_alpha]
-        self.alpha_ = self.alpha_[keep_alpha]
-        self.alpha_old = self.alpha_old[keep_alpha]
-        self.gamma = self.gamma[keep_alpha]
-        self.phi = self.phi[keep_alpha, :]
-        self.sigma_ = self.sigma_[np.ix_(keep_alpha, keep_alpha)]
-        self.mean_ = self.mean_[keep_alpha]
 
     def fit(self, X, y):
         """Fit the RVR to the training data."""
@@ -101,40 +73,79 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
         x, t = check_X_y(X, y)
         # obtain n,d from training set
         n_samples, n_features = X.shape
-        # original Phi: ndarray n*n
-        self.phi = self._apply_kernel(x, x)
-        # number of basic functions, equal to the number of the rows (m) in Phi
-        n_basis_functions = self.phi.shape[0]
-
-        self.relevance_ = x
+        # phi_: original Phi, ndarray n_samples*n_samples
+        self.phi_ = self._apply_kernel(x, x)
         self.y = t
-        # initialize alpha, beta, means and record current alpha
-        self.alpha_ = self.alpha * np.ones(n_basis_functions,)
+        # initialize alpha, beta for the first iteration
+        self.alpha_ = np.full((n_samples,), 1e9)
         self.beta_ = self.beta
-        self.mean_ = np.zeros(n_basis_functions,)
-        self.alpha_old = self.alpha_
 
     # Algorithm II: Fast Marginal Likelihood Maximisation for Sparse Bayesian Models, M.Tipping
-        # pick a sample, initialize hyper-parameters
         # P7 Equation(26): initialize model with a single sample and set a[i]
         # randomly find a single sample i
-        i = randint(self.n_sample)
-        self.alpha_[i] = la.norm(self.phi[i])**2/((la.norm(self.phi[i] * self.y)/la.norm(self.phi[i]))**2-1/self.beta_)
+        i = randint(n_samples)
+        self.alpha_[i] = norm(self.phi_[i])**2/((norm(self.phi_[i] * self.y)/norm(self.phi_[i]))**2-1/self.beta_)
+        # record active samples and the number of active samples
+        active_sample = np.zeros((n_samples,), dtype=bool)
+        active_sample[i] = True
+        self.alpha = self.alpha_[active_sample]
+        self.phi = self.phi_[active_sample]
 
-        # initialize a quantity C parameter
-        quantity_c = np.ones((self.n_sample, self.n_sample))
-        # initialize a zero array for theta
-        theta = np.zeros((self.n_sample,))
         # P4 Equation 16: initialize theta
-        theta[i] = np.linalg.norm(self.kernel[i] * self.y.T) / (self.n_class * np.square(self.kernel[i]).sum())
+        #theta[i] = np.linalg.norm(self.kernel[i] * self.y.T) / (self.n_class * np.square(self.kernel[i]).sum())
 
-        # record active samples
-        active_sample = [i]
+        # loop
+        for loop in range(self.n_iter):
+            # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
+            B = np.zeros((n_samples, n_samples))
+            np.fill_diagonal(B, 1/self.beta_)
+            A = np.diag(self.alpha)
+            quantity_c = B + np.matmul(np.matmul(self.phi.T, A), self.phi)
 
-        for i in range(self.n_iter):
-            quantity_c = np.diag(1/self.beta_) + self.phi[active_sample].T*self.
-
-
+            # find a sample among non-active samples (selected sample is not included in C)
+            s = np.zeros((n_samples, 1))
+            q = np.zeros((n_samples, 1))
+            theta = np.zeros((n_samples, 1))
+            for i in range(n_samples):
+                if ~active_sample[i]:
+                    # P5 Equation(19): compute s_i and q_i
+                    # P7 Step(5): compute theta_i
+                    s[i] = np.dot(np.matmul(self.phi_[i], np.linalg.inv(quantity_c)), self.phi_[i])
+                    q[i] = np.dot(np.matmul(self.phi_[i], np.linalg.inv(quantity_c)), self.y)
+                    theta[i] = q[i]**2 - s[i]
+                else:
+                    continue
+            # select the one which has the highest theta (contribution)
+            if np.max(theta) > 0:
+                # update active samples
+                next_sample = np.argmax(theta)
+                active_sample[next_sample] = True
+                n_basis_functions = np.sum(active_sample)
+                self.phi = self.phi_[active_sample]
+                self.relevance = x[active_sample]
+                # update alpha and beta
+                # P5 Equation(20): update alpha
+                self.alpha_[next_sample] = s[next_sample]**2 / (q[next_sample]**2 - s[next_sample])
+                self.alpha = self.alpha_[active_sample]
+                # update Sigma and mean
+                self._posterior()
+                # P7 Step(9): update beta
+                self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
+                             norm(self.y - np.matmul(self.phi.T, self.mean_))**2
+            else:
+                if loop == 0:
+                    i = randint(n_samples)
+                    self.alpha_ = np.full((n_samples,), 1e9)
+                    self.alpha_[i] = norm(self.phi_[i])**2 / \
+                                     ((norm(self.phi_[i]*self.y)/norm(self.phi_[i]))**2-1/self.beta_)
+                    active_sample = np.zeros((n_samples,), dtype=bool)
+                    active_sample[i] = True
+                    self.alpha = self.alpha_[active_sample]
+                    self.phi = self.phi_[active_sample]
+                else:
+                    print(self.alpha)
+                    print('terminal loop:', loop)
+                    break
 
         # return value
         return self
@@ -143,32 +154,15 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
         """Evaluate the RVR model at x."""
         # test_X: ndarray n_test*d; self.relevance_: ndarray m*d
         # test_phi: ndarray n_test*m
-        test_phi = self._apply_kernel(test_X, self.relevance_)
+        test_phi = self._apply_kernel(test_X, self.relevance)
         y = np.dot(test_phi, self.mean_)
 
         # return value
         return y
 
 
+class mRVM():
 
-class mRVM(Base_RVM):
-    """
-
-    :param
-        kernel
-        a(array: n_sample * n_class): scales matrix
-        w(array: n_sample * n_class): weight/regressor, most elements are zeros
-        y(array: n_class * n_sample): given a sample n, we assign it to the class c with the highest y_cn
-
-
-    The training phase follows the consecutive updates of A, W and Y
-
-    """
-    def __init__(self, n_class: int=3):
-        self.n_class = n_class
-        self.a = np.full((self.n_sample, n_class), np.inf)
-        self.w = np.zeros((self.n_sample, n_class))
-        self.y = np.zeros((n_class, self.n_sample))
 
     def __update_a(self, i: int, s, q):
         """
@@ -266,13 +260,3 @@ class mRVM(Base_RVM):
 
         return self
 
-    def predict(self, test_set, n_quapoint: int=20):
-        """
-
-        :param
-            test_set():
-        :return:
-
-        """
-
-        return self
