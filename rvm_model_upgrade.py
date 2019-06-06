@@ -28,23 +28,23 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         kernel='linear',  # kernel type
-        max_iter=1000,  # maximum iteration times
-        tol=1e-3,  # convergence criterion
+        max_iter=200,  # maximum iteration times
+        conv=1e-3,  # convergence criterion
         beta=1e-6,  # initial beta
     ):
         """Copy params to object properties, no validation."""
         self.kernel = kernel
         self.n_iter = max_iter
-        self.tol = tol
+        self.conv = conv
         self.beta = beta
-        self.alpha, self.alpha_, self.beta_, self.relevance, self.phi, self.phi_, self.mean_, self.sigma_ = [None]*8
+        self.alpha, self.alpha_, self.alpha_old, self.beta_, self.relevance, self.phi, self.phi_, self.mean_, self.sigma_ = [None]*9
 
     def get_params(self, deep=True):
         """Return parameters as a dictionary."""
         params = {
             'kernel': self.kernel,
             'max_iter': self.max_iter,
-            'tol': self.tol,
+            'conv': self.conv,
             'beta': self.beta,
         }
         return params
@@ -91,15 +91,16 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
         active_sample = np.zeros((n_samples,), dtype=bool)
         active_sample[i] = True
         self.alpha = self.alpha_[active_sample]
+        self.alpha_old = self.alpha_
         self.phi = self.phi_[active_sample]
-
+        delete_sample = 0
         # loop
         for loop in range(self.n_iter):
             # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
             B = np.zeros((n_samples, n_samples))
             np.fill_diagonal(B, 1/self.beta_)
             A = np.diag(self.alpha)
-            quantity_c = B + self.phi.T @ A @ self.phi
+            quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
 
             # find a sample among non-active samples (selected sample is not included in C)
             s = np.zeros((n_samples,))
@@ -109,37 +110,27 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 if ~active_sample[i]:
                     # P5 Equation(19): compute s_i and q_i
                     # P7 Step(5): compute theta_i
-                    s[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.phi_[i]
-                    q[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.y
+                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
+                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
                     theta[i] = q[i]**2 - s[i]
-                else:
-                    continue
+                elif active_sample[i]:
+                    # P5 Equation (22) / P6 Equation (23): compute s_i and q_i
+                    # P7 Step(5): compute theta_i
+                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
+                    s[i] = self.alpha_[i]*s[i] / (self.alpha_[i] - s[i])
+                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
+                    q[i] = self.alpha_[i]*q[i] / (self.alpha_[i] - s[i])
+                    theta[i] = q[i]**2 - s[i]
             # select the one which has the highest theta (contribution)
-            """
-            # add samples one by one
-            if np.max(theta) > 0:
-                # update active samples
-                next_sample = np.argmax(theta)
-                active_sample[next_sample] = True
-                n_basis_functions = np.sum(active_sample)
-                self.phi = self.phi_[active_sample]
-                self.relevance = x[active_sample]
-                # update alpha and beta
-                # P5 Equation(20): update alpha
-                self.alpha_[next_sample] = s[next_sample]**2 / (q[next_sample]**2 - s[next_sample])
-                self.alpha = self.alpha_[active_sample]
-                # update Sigma and mean
-                self._posterior()
-                # P7 Step(9): update beta
-                self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
-                             norm(self.y - self.phi.T @ self.mean_)**2
-            """
-            add_sample = np.argwhere(theta > 2e-1)
-            if add_sample.size:
-                # update active samples
+            if np.max(theta[~active_sample]) > 0:
+                add_sample = np.argwhere(theta == np.max(theta[~active_sample]))[0][0]
+                # prevent infinite loop
+                if add_sample == delete_sample:
+                    theta[add_sample] = 0
+                    add_sample = np.argwhere(theta == np.max(theta[~active_sample]))[0][0]
                 active_sample[add_sample] = True
                 n_basis_functions = np.sum(active_sample)
-                print('add samples,', n_basis_functions)
+                print('add samples,',add_sample, 'samples:', n_basis_functions)
                 self.phi = self.phi_[active_sample]
                 self.relevance = x[active_sample]
                 # update alpha and beta
@@ -151,38 +142,49 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 # P7 Step(9): update beta
                 self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
                              norm(self.y - self.phi.T @ self.mean_) ** 2
+                update = abs(self.alpha_[add_sample])
+            elif np.min(theta[active_sample]) < 0:
+                delete_sample = np.argwhere(theta == np.min(theta[active_sample]))[0][0]
+                # prevent infinite loop
+                if delete_sample == add_sample:
+                    theta[delete_sample] = 0
+                    delete_sample = np.argwhere(theta == np.min(theta[active_sample]))[0][0]
+                # update active samples
+                active_sample[delete_sample] = False
+                n_basis_functions = np.sum(active_sample)
+                print('delete samples,', delete_sample, 'samples:', n_basis_functions)
+                self.phi = self.phi_[active_sample]
+                self.relevance = x[active_sample]
+                self.alpha_[delete_sample] = 1e9
+                self.alpha = self.alpha_[active_sample]
+                self._posterior()
+                self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
+                             norm(self.y - self.phi.T @ self.mean_) ** 2
+                update = abs(self.alpha_old[delete_sample])
+            elif np.max(theta[active_sample]) > 0:
+                modify_sample = np.argwhere(theta == np.max(theta[active_sample]))[0][0]
+                print('modify samples,', modify_sample, 'samples:', n_basis_functions)
+                # update alpha and beta
+                update = self.alpha_[modify_sample]
+                # P5 Equation(20): update alpha
+                self.alpha_[modify_sample] = s[modify_sample] ** 2 / (q[modify_sample] ** 2 - s[modify_sample])
+                self.alpha = self.alpha_[active_sample]
+                # update Sigma and mean
+                self._posterior()
+                # P7 Step(9): update beta
+                self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
+                             norm(self.y - self.phi.T @ self.mean_) ** 2
+                update = abs(update - self.alpha_[modify_sample])
+
+            # check convergence criterion
+            if update < 1e-3:
+                print(loop)
+                print(theta[~active_sample])
+                print(self.alpha)
+                print(self.beta_)
+                break
             else:
-                B = np.zeros((n_samples, n_samples))
-                np.fill_diagonal(B, 1 / self.beta_)
-                A = np.diag(self.alpha)
-                quantity_c = B + self.phi.T @ A @ self.phi
-                s = np.zeros((n_samples, 1))
-                q = np.zeros((n_samples, 1))
-                theta = np.zeros((n_samples, 1))
-                for i in range(n_samples):
-                    if active_sample[i]:
-                        # P5 Equation(19): compute s_i and q_i
-                        # P7 Step(5): compute theta_i
-                        s[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.phi_[i]
-                        q[i] = self.phi_[i].T @ np.linalg.inv(quantity_c) @ self.y
-                        theta[i] = q[i] ** 2 - s[i]
-                    else:
-                        continue
-                delete_sample = np.argwhere(theta < -2e-1)
-                if delete_sample.size:
-                    active_sample[delete_sample] = False
-                    n_basis_functions = np.sum(active_sample)
-                    print('delete samples,', n_basis_functions)
-                    self.alpha = self.alpha_[active_sample]
-                    self.phi = self.phi_[active_sample]
-                    self.relevance = x[active_sample]
-                    self._posterior()
-                    self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
-                                 norm(self.y - self.phi.T @ self.mean_) ** 2
-                else:
-                    print(self.alpha)
-                    print(self.beta_)
-                    break
+                self.alpha_old = self.alpha_
 
         # return value
         return self
@@ -199,7 +201,6 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
 
 
 class mRVM():
-
 
     def __update_a(self, i: int, s, q):
         """
