@@ -28,7 +28,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         kernel='linear',  # kernel type
-        max_iter=200,  # maximum iteration times
+        max_iter=500,  # maximum iteration times
         conv=1e-3,  # convergence criterion
         beta=1e-6,  # initial beta
     ):
@@ -93,45 +93,46 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
         self.alpha = self.alpha_[active_sample]
         self.alpha_old = self.alpha_
         self.phi = self.phi_[active_sample]
+        # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
+        B = np.zeros((n_samples, n_samples))
+        np.fill_diagonal(B, 1 / self.beta_)
+        A = np.diag(self.alpha)
+        quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
+        # calculate sparsity, quality quantities and contribution (s, q and theta)
+        s = np.zeros((n_samples,))
+        q = np.zeros((n_samples,))
+        theta = np.zeros((n_samples,))
+        for i in range(n_samples):
+            # P5 Equation(19): compute s_i and q_i
+            s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
+            q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
+            # P7 Step(5): compute theta_i
+            if ~active_sample[i]:
+                theta[i] = q[i] ** 2 - s[i]
+            else:
+                # P6 Equation (23): compute s_i and q_i
+                s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
+                q[i] = self.alpha_[i] * q[i] / (self.alpha_[i] - s[i])
+                theta[i] = q[i] ** 2 - s[i]
+        add_sample = 0
+        delete_sample = 0
+
         # loop
         for loop in range(self.n_iter):
-            # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
-            B = np.zeros((n_samples, n_samples))
-            np.fill_diagonal(B, 1/self.beta_)
-            A = np.diag(self.alpha)
-            quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
-        # calculate sparsity, quality quantities and contribution (s, q and theta)
-            s = np.zeros((n_samples,))
-            q = np.zeros((n_samples,))
-            theta = np.zeros((n_samples,))
-            for i in range(n_samples):
-                if ~active_sample[i]:
-                    # P5 Equation(19): compute s_i and q_i
-                    # P7 Step(5): compute theta_i
-                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
-                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
-                    theta[i] = q[i]**2 - s[i]
-                elif active_sample[i]:
-                    # P5 Equation (22) / P6 Equation (23): compute s_i and q_i
-                    # P7 Step(5): compute theta_i
-                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
-                    s[i] = self.alpha_[i]*s[i] / (self.alpha_[i] - s[i])
-                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
-                    q[i] = self.alpha_[i]*q[i] / (self.alpha_[i] - s[i])
-                    theta[i] = q[i]**2 - s[i]
-        # update alpha
+            # update alpha
+            add = np.max(theta[~active_sample])
+            delete = np.min(theta[active_sample])
             # add non-active but contributed samples
-            if np.max(theta[~active_sample]) > 0:
-                add_sample = np.argwhere(theta == np.max(theta[~active_sample]))[0][0]
+            if add > 0:
+                add_sample = np.argwhere(theta == add)[0][0]
                 # prevent infinite loop
-                if loop > 1:
-                    if add_sample == delete_sample:
-                        theta[add_sample] = 0
-                        add_sample = np.argwhere(theta == np.max(theta[~active_sample]))[0][0]
+                if add_sample == delete_sample:
+                    theta[add_sample] = 0
+                    add_sample = np.argwhere(theta == np.max(theta[~active_sample]))[0][0]
                 # update active samples / hyper-parameters
                 active_sample[add_sample] = True
                 n_basis_functions = np.sum(active_sample)
-                print('add samples,',add_sample, 'samples:', n_basis_functions)
+                print('add samples', add_sample, 'samples:', n_basis_functions)
                 self.phi = self.phi_[active_sample]
                 self.relevance = x[active_sample]
                 # update alpha and beta
@@ -146,8 +147,8 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 # quantize the update during this iteration
                 update = abs(self.alpha_[add_sample])
             # delete active but non-contributed samples
-            elif np.min(theta[active_sample]) < 0:
-                delete_sample = np.argwhere(theta == np.min(theta[active_sample]))[0][0]
+            elif delete < 0:
+                delete_sample = np.argwhere(theta == delete)[0][0]
                 # prevent infinite loop
                 if delete_sample == add_sample:
                     theta[delete_sample] = 0
@@ -166,11 +167,9 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 # quantize the update during this iteration
                 update = abs(self.alpha_old[delete_sample])
             # adjust active and also contributed samples
-            elif np.max(theta[active_sample]) > 0:
+            else:
                 modify_sample = np.argwhere(theta == np.max(theta[active_sample]))[0][0]
-                print('modify samples,', modify_sample, 'samples:', n_basis_functions)
-                # record alpha value before this iteration
-                update = self.alpha_[modify_sample]
+                print('modify samples', modify_sample, 'samples:', n_basis_functions)
                 # update parameters
                 # P5 Equation(20): update alpha
                 self.alpha_[modify_sample] = s[modify_sample] ** 2 / (q[modify_sample] ** 2 - s[modify_sample])
@@ -181,10 +180,10 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
                              norm(self.y - self.phi.T @ self.mean_) ** 2
                 # quantize the update during this iteration
-                update = abs(update - self.alpha_[modify_sample])
+                update = abs(self.alpha_old[modify_sample] - self.alpha_[modify_sample])
 
         # check convergence criterion
-            if update < 1e-3:
+            if add <= 0 <= delete and update < 1e-3:
                 print(loop)
                 print(theta[~active_sample])
                 print(self.alpha)
@@ -192,6 +191,24 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 break
             else:
                 self.alpha_old = self.alpha_
+                # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
+                B = np.zeros((n_samples, n_samples))
+                np.fill_diagonal(B, 1 / self.beta_)
+                A = np.diag(self.alpha)
+                quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
+                # calculate sparsity, quality quantities and contribution (s, q and theta)
+                for i in range(n_samples):
+                    # P5 Equation(19): compute s_i and q_i
+                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
+                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
+                    # P7 Step(5): compute theta_i
+                    if ~active_sample[i]:
+                        theta[i] = q[i] ** 2 - s[i]
+                    else:
+                        # P6 Equation (23): compute s_i and q_i
+                        s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
+                        q[i] = self.alpha_[i] * q[i] / (self.alpha_[i] - s[i])
+                        theta[i] = q[i] ** 2 - s[i]
 
         # return value
         return self
