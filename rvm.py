@@ -7,6 +7,8 @@ from concatenate_features import create_clip_extract_features
 rightlc_feat = create_clip_extract_features('rightlc')
 leftlc_feat = create_clip_extract_features('leftlc')
 lk_feat = create_clip_extract_features('lk')
+# balance the dataset
+leftlc_feat = leftlc_feat[0:100, :]
 
 # total number of right lc
 n_rlc = np.size(rightlc_feat, 0) # 68
@@ -61,7 +63,7 @@ for fold in range(3):
     for cls in range(3):
         clf.fit(Xtrain, ytrain[cls])
         prob[cls] = clf.predict(Xtest)
-    # pick the highest probability, extract the labels from the test data
+    # pick the highest probability, extract the real labels from the test data
     result = np.argmax(prob, axis=0)
     t = np.argmax(ytest,axis=0)
     # calculate tp rates for each fold
@@ -69,7 +71,7 @@ for fold in range(3):
     # calculate confusion matrices
     for n in range(np.size(Xtest,0)):
         conf[t[n], result[n]] = conf[t[n], result[n]]+1
-    print(conf)
+    #print(prob)
 accuracy = np.mean(tp)
 print(accuracy)
 print(conf)

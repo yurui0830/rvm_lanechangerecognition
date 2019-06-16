@@ -28,7 +28,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         kernel='linear',  # kernel type
-        max_iter=400,  # maximum iteration times
+        max_iter=500,  # maximum iteration times
         conv=1e-3,  # convergence criterion
         beta=1e-6,  # initial beta
     ):
@@ -132,7 +132,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 # update active samples / hyper-parameters
                 active_sample[add_sample] = True
                 n_basis_functions = np.sum(active_sample)
-                #print('add samples', add_sample, 'samples:', n_basis_functions)
+                print('add samples', add_sample, 'samples:', n_basis_functions)
                 self.phi = self.phi_[active_sample]
                 self.relevance = x[active_sample]
                 # update alpha and beta
@@ -156,7 +156,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 # update active samples / hyper-parameters
                 active_sample[delete_sample] = False
                 n_basis_functions = np.sum(active_sample)
-                #print('delete samples,', delete_sample, 'samples:', n_basis_functions)
+                print('delete samples,', delete_sample, 'samples:', n_basis_functions)
                 self.phi = self.phi_[active_sample]
                 self.relevance = x[active_sample]
                 self.alpha_[delete_sample] = 1e9
@@ -169,7 +169,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
             # adjust active and also contributed samples
             else:
                 modify_sample = np.argwhere(theta == np.max(theta[active_sample]))[0][0]
-                #print('modify samples', modify_sample, 'samples:', n_basis_functions)
+                print('modify samples', modify_sample, 'samples:', n_basis_functions)
                 # update parameters
                 # P5 Equation(20): update alpha
                 self.alpha_[modify_sample] = s[modify_sample] ** 2 / (q[modify_sample] ** 2 - s[modify_sample])
@@ -184,7 +184,8 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
 
         # check convergence criterion
             if add <= 0 <= delete and update < 1e-3:
-                print('model converged')
+                print(loop)
+                print(theta[~active_sample])
                 print(self.alpha)
                 print(self.beta_)
                 break
@@ -200,12 +201,15 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                     # P5 Equation(19): compute s_i and q_i
                     s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
                     q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
-                    if active_sample[i]:
+                    # P7 Step(5): compute theta_i
+                    if ~active_sample[i]:
+                        theta[i] = q[i] ** 2 - s[i]
+                    else:
                         # P6 Equation (23): compute s_i and q_i
                         s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
                         q[i] = self.alpha_[i] * q[i] / (self.alpha_[i] - s[i])
-                    # P7 Step(5): compute theta_i
-                    theta[i] = q[i] ** 2 - s[i]
+                        theta[i] = q[i] ** 2 - s[i]
+
         # return value
         return self
 
@@ -218,3 +222,99 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
 
         # return value
         return y
+
+class mRVM(OneClass_RVM):
+
+    def __update_a(self, i: int, s, q):
+        """
+        P3 Equation 11,12
+
+        :param
+            i(int): denote the i-th sample
+            s(float): sparsity factor (a scale)
+            q(array: n_class,): quality factor (n_class scales)
+        :return:
+        """
+        # P3 Equation 11,12: update A
+        if np.square(q).sum() > self.n_class * s:
+            self.a[i] = self.n_class*np.square(s) / (np.square(q).sum() - self.n_class*s)
+        else:
+            self.a[i] = np.inf
+        # return model itself
+        return  self
+
+    def __update_w(self, active_sample, quantity_kka):
+        # P3 Equation 14: update W
+        self.w[active_sample] = quantity_kka*self.kernel[active_sample]*self.y.T
+        # return model itself
+        return self
+
+    def __update_y(self):
+        # P2 Equation 3,4: update Y
+        return self
+
+    def fit(self, x, t):
+        """
+        train this model by labels
+
+        :param
+            training_set(array: n_class * n_feature)
+            t(array: n_class * n_sample): labels
+        :return:
+
+        """
+
+    # pick a sample, initialize hyper-parameters
+        # initialize Y to follow target labels t
+        self.y = t
+        # P3 Equation 15: initialize model with a single sample and set a[i]
+        # randomly find a single sample i
+        i = randint(self.n_sample)
+        temp = 0
+        for cls in range(self.n_class):
+            temp = temp + np.dot(self.kernel[i], self.y[cls,:]) ** 2
+        self.a[i] = self.n_class*np.square(self.kernel[i]).sum() / (temp/np.square(self.kernel[i]).sum() - self.n_class)
+        # initialize a quantity C parameter
+        quantity_c = np.ones((self.n_sample, self.n_sample))
+        # initialize a zero array for theta
+        theta = np.zeros((self.n_sample,))
+        # P4 Equation 16: initialize theta
+        theta[i] = np.linalg.norm(self.kernel[i] * self.y.T) / (self.n_class * np.square(self.kernel[i]).sum())
+        # record active samples
+        active_sample = [i]
+
+    # update hyper-parameters
+        # Pe Equation 17
+        # use a quantity to replace inv(K_star*K_star_transpose+A_star), save computational cost
+        quantity_kka = np.linalg.inv(self.kernel[active_sample]*self.kernel[active_sample].T + self.a[active_sample])
+        # P4 Equation 18/19: calculate S and Q
+        # S(array: n_sample * n_sample): sparsity factor (diagonal matrix)
+        # Q(array: n_sample * n_class): quality factor
+        s = self.kernel*self.kernel.T - self.kernel*self.kernel[active_sample].T*quantity_kka*self.kernel[active_sample]*self.kernel
+        q = self.kernel*self.y.T - self.kernel*self.kernel[active_sample].T*quantity_kka*self.kernel[active_sample]*self.y.T
+        if theta[i] > 0 and self.a[i] < np.inf: # update A[i] (sample i is already in the model)
+            # P4 Equation 20,21: tune Q and S in order not to include the existing sample i
+            s[i,i] = self.a[i] * s[i,i] / (self.a[i] - s[i,i])
+            q[i] = self.a[i] * q[i] / (self.a[i] - s[i,i])
+            # update A
+            self.__update_a(i, s[i,i], q[i])
+        elif theta[i] > 0 and self.a[i] < np.inf: # add sample i into the model
+            # update A
+            self.__update_a(i, s[i,i], q[i])
+            # add sample i
+            #active_sample = np.sort(np.insert(active_sample, i), axis=None)
+            active_sample.insert(i).sort()
+        elif theta[i] <= 0 and self.a[i] < np.inf: # delete sample i from the model
+            # delete A[i]
+            self.a[i] = np.inf
+            # delete sample i
+            active_sample.remove(i)
+        # update W
+        self.__update_w(active_sample, quantity_kka)
+        # update Y
+        self.__update_y()
+
+    # recalculate theta for all samples
+        # P3 Equation 13: update theta
+
+        return self
