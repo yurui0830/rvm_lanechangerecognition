@@ -84,9 +84,9 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     # Algorithm II: Fast Marginal Likelihood Maximisation for Sparse Bayesian Models, M.Tipping
         # P7 Equation(26): initialize model with a single sample and set a[i]
         # randomly find a single sample i
-        i = np.argmax(norm(np.dot(self.phi_, self.y))/norm(np.sum(self.phi_, 1)))
+        i = np.argmax((self.phi_ @ self.y)**2/np.sum(self.phi_ ** 2, 1))
         # i = randint(n_samples)
-        self.alpha_[i] = norm(self.phi_[i])**2/((norm(self.phi_[i]*self.y)/norm(self.phi_[i]))**2-1/self.beta_)
+        self.alpha_[i] = norm(self.phi_[i])**2/((norm(self.phi_[i]*self.y)/norm(self.phi_[i]))**2 - 1/self.beta_)
         # record active samples and the number of active samples
         active_sample = np.zeros((n_samples,), dtype=bool)
         active_sample[i] = True
@@ -107,21 +107,41 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
             s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
             q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
             # P7 Step(5): compute theta_i
-            if ~active_sample[i]:
-                theta[i] = q[i] ** 2 - s[i]
-            else:
+            if active_sample[i]:
                 # P6 Equation (23): compute s_i and q_i
                 s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
                 q[i] = self.alpha_[i] * q[i] / (self.alpha_[i] - s[i])
-                theta[i] = q[i] ** 2 - s[i]
+            theta[i] = q[i] ** 2 - s[i]
         add_sample = 0
         delete_sample = 0
 
         # loop
         for loop in range(self.n_iter):
+            try:
+                add = np.max(theta[~active_sample])
+                delete = np.min(theta[active_sample])
+            except ValueError:
+                i = randint(n_samples)
+                self.alpha_[i] = s[i]**2 / theta[i]
+                active_sample[i] = True
+                self.alpha = self.alpha_[active_sample]
+                self.phi = self.phi_[active_sample]
+                A = np.diag(self.alpha)
+                quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
+                for i in range(n_samples):
+                    # Fast P5 Equation(19) + P2 Equation(11,12): compute s_i and q_i
+                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
+                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y.T
+                    # P7 Step(5): compute theta_i
+                    if active_sample[i]:
+                        # P4 Equation (20,21): compute s_i and q_i
+                        s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
+                        q[i] = (self.alpha_[i] * q[i] / (self.alpha_[i] - s[i]))
+                    theta[i] = q[i] ** 2 - s[i]
+                continue
+            else:
+                pass
             # update alpha
-            add = np.max(theta[~active_sample])
-            delete = np.min(theta[active_sample])
             # add non-active but contributed samples
             if add > 0:
                 add_sample = np.argwhere(theta == add)[0][0]
@@ -168,44 +188,28 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
                 update = abs(self.alpha_old[delete_sample])
             # adjust active and also contributed samples
             else:
-                modify_sample = np.argwhere(theta == np.max(theta[active_sample]))[0][0]
-                #print('modify samples', modify_sample, 'samples:', n_basis_functions)
-                # update parameters
-                # P5 Equation(20): update alpha
-                self.alpha_[modify_sample] = s[modify_sample] ** 2 / (q[modify_sample] ** 2 - s[modify_sample])
-                self.alpha = self.alpha_[active_sample]
-                # update Sigma and mean
-                self._posterior()
-                # P7 Step(9): update beta
-                self.beta_ = (n_samples - n_basis_functions + np.dot(self.alpha, np.diag(self.sigma_))) / \
-                             norm(self.y - self.phi.T @ self.mean_) ** 2
-                # quantize the update during this iteration
-                update = abs(self.alpha_old[modify_sample] - self.alpha_[modify_sample])
-
-        # check convergence criterion
-            if add <= 0 <= delete and update < 1e-3:
-                print('model converged')
-                print(self.alpha)
-                print(self.beta_)
-                break
-            else:
-                self.alpha_old = self.alpha_
-                # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
-                B = np.zeros((n_samples, n_samples))
-                np.fill_diagonal(B, 1 / self.beta_)
-                A = np.diag(self.alpha)
-                quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
-                # calculate sparsity, quality quantities and contribution (s, q and theta)
-                for i in range(n_samples):
-                    # P5 Equation(19): compute s_i and q_i
-                    s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
-                    q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
-                    if active_sample[i]:
-                        # P6 Equation (23): compute s_i and q_i
-                        s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
-                        q[i] = self.alpha_[i] * q[i] / (self.alpha_[i] - s[i])
-                    # P7 Step(5): compute theta_i
-                    theta[i] = q[i] ** 2 - s[i]
+                if update < 1e-3:
+                    print('model converged')
+                    print(self.alpha)
+                    print(self.beta_)
+                    break
+                else:
+                    self.alpha_old = self.alpha_
+                    # P3 Equation(8): update B (noise) and C: array n_samples*n_samples
+                    np.fill_diagonal(B, 1 / self.beta_)
+                    A = np.diag(self.alpha)
+                    quantity_c_inv = np.linalg.inv(B + self.phi.T @ A @ self.phi)
+                    # calculate sparsity, quality quantities and contribution (s, q and theta)
+                    for i in range(n_samples):
+                        # P5 Equation(19): compute s_i and q_i
+                        s[i] = self.phi_[i].T @ quantity_c_inv @ self.phi_[i]
+                        q[i] = self.phi_[i].T @ quantity_c_inv @ self.y
+                        if active_sample[i]:
+                            # P6 Equation (23): compute s_i and q_i
+                            s[i] = self.alpha_[i] * s[i] / (self.alpha_[i] - s[i])
+                            q[i] = self.alpha_[i] * q[i] / (self.alpha_[i] - s[i])
+                        # P7 Step(5): compute theta_i
+                        theta[i] = q[i] ** 2 - s[i]
         # return value
         return self
 
