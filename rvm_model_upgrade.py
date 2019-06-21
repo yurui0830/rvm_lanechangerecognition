@@ -28,7 +28,7 @@ class OneClass_RVM(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         kernel='linear',  # kernel type
-        max_iter=400,  # maximum iteration times
+        max_iter=10,  # maximum iteration times
         conv=1e-3,  # convergence criterion
         beta=1e-6,  # initial beta
     ):

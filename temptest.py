@@ -36,7 +36,7 @@ lk_set = int(n_lk/3)
 # initialize tp to store true-positive rates, conf to store confusion matrices
 tp = np.zeros((3,1))
 conf = np.zeros((3,3), dtype=int)
-for fold in range(1, 1):
+for fold in range(1, 2):
     if fold == 1:
         X = np.concatenate((rightlc_feat[0:r_set], leftlc_feat[0:l_set], lk_feat[0:lk_set]))
         y = np.concatenate((t_rlc[:, 0:r_set], t_llc[:, 0:l_set], t_lk[:, 0:lk_set]), axis=1)
@@ -57,15 +57,6 @@ for fold in range(1, 1):
     elif fold == 6:
         X = np.concatenate((rightlc_feat[0:r_set*2], leftlc_feat[0:l_set*2], lk_feat[0:lk_set*2]))
         y = np.concatenate((t_rlc[:, 0:r_set*2], t_llc[:, 0:l_set*2], t_lk[:, 0:lk_set*2]), axis=1)
-X = np.zeros((4, 5))
-y = np.zeros((2, 4))
-y[0, 0:2] = 1
-y[1, 2:] = 1
-X[0] = [2, 3, 6, -4, 11]
-X[1] = [4, 6, 12, 0, 22]
-X[2] = [-4, -6, -13, -11, -22]
-X[3] = [-1, -2, -5, 9, -9]
-
-k = pairwise_kernels(X, X, metric='linear')
-i = np.argmin(np.sum((X.T @ y.T)**2, 1)/np.sum(X ** 2, 0))
-print(i)
+print(X.shape)
+X = np.append(X, np.ones((1, X.shape[1])), axis=0)
+print(X.shape)

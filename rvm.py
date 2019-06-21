@@ -57,9 +57,9 @@ for fold in range(3):
     # initialize prob to store regression results
     prob = np.zeros((3,np.size(Xtest,0)))
     # model training
-    #clf = RVR()
+    clf = RVR()
     #clf = Base_RVM()
-    clf = OneClass_RVM()
+    #clf = OneClass_RVM()
     for cls in range(3):
         clf.fit(Xtrain, ytrain[cls])
         prob[cls] = clf.predict(Xtest)

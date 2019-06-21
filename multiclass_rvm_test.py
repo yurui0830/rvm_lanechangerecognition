@@ -55,9 +55,8 @@ for fold in range(3):
 
     # model training
     clf = MultiClass_RVM()
-    for cls in range(3):
-        clf.fit(Xtrain, ytrain)
-        predict = clf.predict(Xtest)
+    clf.fit(Xtrain, ytrain)
+    predict = clf.predict(Xtest)
     # pick the highest probability, extract the real labels from the test data
     t = np.argmax(ytest,axis=0)
     # calculate tp rates for each fold
