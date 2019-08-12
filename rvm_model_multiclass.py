@@ -3,6 +3,8 @@ from numpy.linalg import norm
 from sklearn.metrics.pairwise import pairwise_kernels
 from numpy.random import randint
 from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.preprocessing import normalize
+from sklearn.decomposition import KernelPCA
 from sklearn.utils.validation import check_X_y
 import warnings
 warnings.filterwarnings("error")
@@ -32,9 +34,9 @@ class MultiClass_RVM(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         kernel='linear',  # kernel type
-        max_iter=300,  # maximum iteration times
+        max_iter=180,  # maximum iteration times
         conv=1e-3,  # convergence criterion
-        beta=10,  # initial beta
+        beta=1e3,  # initial beta
         bias_used=True   # bias
     ):
         """Copy params to object properties, no validation."""
@@ -77,15 +79,16 @@ class MultiClass_RVM(BaseEstimator, RegressorMixin):
         # sigma_: ndarray (m+1)*(m+1); mean_: ndarray (m+1)*c
         self.sigma_ = np.linalg.inv(quantity)
         self.mean_ = self.beta_ * (self.sigma_ @ self.phi @ self.y.T)
+        return self
 
     def fit(self, X, Y):
         """Fit the RVR to the training data."""
 
         # obtain n,d from training set
-        n_class, n_samples = Y.shape
+        n_samples, n_class = Y.shape
         # phi_: original Phi, ndarray n_samples*n_samples
         self.phi_ = self._apply_kernel(X, X)
-        self.y = Y
+        self.y = Y.T
         # initialize alpha, beta for the first iteration
         if self.bias_used:
             n_size = n_samples + 1
@@ -272,12 +275,26 @@ class MultiClass_RVM(BaseEstimator, RegressorMixin):
         # return value
         return self
 
-    def predict(self, test_X):
-        """Evaluate the RVR model at x."""
+    def score(self, test_X, test_y):
+        """
+        Evaluate the RVR model at x
+        usage: accuracy, conf = clf.score(test_x, test_y)
+
+        test_X(array: n_sample*n_feature)
+        test_y(array: n_class*n_sample)
+        """
         # test_X: ndarray n_test*d; self.relevance_: ndarray m*d
         # test_phi: ndarray n_test*m
         test_phi = self._apply_kernel(self.relevance, test_X)
         y = test_phi.T @ self.mean_
         t = np.argmax(y, axis=1)
+        # true label
+        label = np.argmax(test_y, axis=1)
+        # accuracy
+        accuracy = np.count_nonzero(t == label) / label.shape[0]
+        # confusion matrix: row: predictions; column: labels
+        confusion = np.zeros([3, 3])
+        for i in range(label.shape[0]):
+            confusion[t[i], label[i]] = confusion[t[i], label[i]] + 1
         # return value
-        return t
+        return accuracy, confusion

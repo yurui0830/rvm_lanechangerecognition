@@ -35,7 +35,7 @@ class BaseRVM(BaseEstimator):
         beta=1.e-6,
         beta_fixed=False,
         bias_used=True,
-        verbose=False
+        verbose=True
     ):
         """Copy params to object properties, no validation."""
         self.kernel = kernel
@@ -158,11 +158,11 @@ class BaseRVM(BaseEstimator):
             self._prune()
 
             if self.verbose:
-                print("Iteration: {}".format(i))
+                #print("Iteration: {}".format(i))
                 print("Alpha: {}".format(self.alpha_))
-                print("Beta: {}".format(self.beta_))
-                print("Gamma: {}".format(self.gamma))
-                print("m: {}".format(self.m_))
+                #print("Beta: {}".format(self.beta_))
+                #print("Gamma: {}".format(self.gamma))
+                #print("m: {}".format(self.m_))
                 print("Relevance Vectors: {}".format(self.relevance_.shape[0]))
                 print()
 

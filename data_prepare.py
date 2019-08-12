@@ -224,7 +224,7 @@ def create_clip_extract_features(filename, slot = '1s'):
         # initialize variables
         start_point = np.zeros((n_sequence,), dtype=int)
         seq_range_clip = np.zeros((n_sequence + 1,), dtype=int)
-        features_clip = np.zeros((50 * n_sequence, np.size(features, 1)))
+        features_clip = np.zeros((20 * n_sequence, np.size(features, 1)))
         # find start point, extract part of the features and labels, update new seq_range
         for i in range(n_sequence):
             start = seq_range[i]
@@ -232,14 +232,10 @@ def create_clip_extract_features(filename, slot = '1s'):
             # find the start point by labels
             start_point[i] = np.argwhere(label[start:stop] == 1)[0] + seq_range[i]
             # extract features and labels
-            if start_point[i] - 20 > seq_range[i]:
-                seq_range_clip[i + 1] = seq_range_clip[i] + 30
-                features_clip[seq_range_clip[i]:seq_range_clip[i + 1]] = features[start_point[i] - 20:start_point[i] + 10]
-            else:
-                seq_range_clip[i + 1] = seq_range_clip[i] + start_point[i] + 10 - seq_range[i]
-                features_clip[seq_range_clip[i]:seq_range_clip[i + 1]] = features[seq_range[i]:start_point[i] + 10]
+            seq_range_clip[i + 1] = seq_range_clip[i] + 20
+            features_clip[seq_range_clip[i]:seq_range_clip[i + 1]] = features[start_point[i] - 10:start_point[i] + 10]
         # delete unused rows from features_new
-        features_clip = np.delete(features_clip, np.s_[seq_range_clip[n_sequence]:], 0)
+        #features_clip = np.delete(features_clip, np.s_[seq_range_clip[n_sequence]:], 0)
     else:
         features_clip = features
         seq_range_clip = seq_range
@@ -252,3 +248,50 @@ def create_clip_extract_features(filename, slot = '1s'):
 
 # return value
     return feat_mu_sigma
+
+
+def rescale(features, coff):
+
+    """
+    function rescale(features, coff=[1])
+    usage: features = rescale(features, [1, -5, 1, 1, 1, 10])
+    0: original
+    1: normalize
+    10: rescale to (0, 10)
+    -5: rescale to (-5, +5)
+
+    :param
+        features(array: n_samples*n_features): feature array (input data of a model)
+        coff(array: n_features,):
+    :return:
+        rescaled features(array: n_samples*n_features)
+    """
+
+    d = features.shape[1]
+    if coff.shape[0] != d:
+        print("CAUTION: feature sizes don't match!")
+        return features
+    #features = normalize(features, axis=0)
+    # rescale
+    for fea in range(d):
+        features[:, fea] = coff[fea]*features[:, fea]
+        #print(features[:, fea].min(), features[:, fea].max())
+    # return value
+    return features
+
+
+def centering(X, column):
+    """
+    centering: mean = 0
+    usage: x = centering(x, np.arange(4))
+
+    :param
+        X(array: n_sample*n_feature): feature array
+        column(array: ?*): which column (feature) need to be centerized
+    :return:
+    """
+    X_center = X
+    for i in column:
+        mean = np.mean(X[:, i], axis=0)
+        X_center[:, i] = X[:, i] - mean
+    return X_center
