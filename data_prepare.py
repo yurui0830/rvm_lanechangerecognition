@@ -1,14 +1,14 @@
 import numpy as np
 import csv
 
-def create_clip_extract_features(filename, slot = '1s'):
+def create_clip_extract_features(filename, slide: int=0):
 
     """
-    function create_clip_extract_features(filename, slot='1s')
+    usage: feat_sigma_mu = create_clip_extract_features(filename, slot='1s')
 
     :param
         filename(str: 'rightlc', 'leftlc' or 'lk'): filename of the .csv file
-        slot(str: '1s', '0.5s', or 'whole'): how long of the procedure is preserved in the training set
+        window_size(int): how long of the procedure is preserved in the training set
 
     :return
         features(array: n_samples * n_features): n_samples = n_sequence * time steps inside each sequence
@@ -220,7 +220,7 @@ def create_clip_extract_features(filename, slot = '1s'):
 
 # clip the lane change/keeping procedures
     # lk class and the whole process do not need to be clipped
-    if filename != 'lk' and slot != 'whole':
+    if filename != 'lk':
         # initialize variables
         start_point = np.zeros((n_sequence,), dtype=int)
         seq_range_clip = np.zeros((n_sequence + 1,), dtype=int)
@@ -233,7 +233,204 @@ def create_clip_extract_features(filename, slot = '1s'):
             start_point[i] = np.argwhere(label[start:stop] == 1)[0] + seq_range[i]
             # extract features and labels
             seq_range_clip[i + 1] = seq_range_clip[i] + 20
-            features_clip[seq_range_clip[i]:seq_range_clip[i + 1]] = features[start_point[i] - 10:start_point[i] + 10]
+            features_clip[seq_range_clip[i]:seq_range_clip[i+1]] = features[start_point[i]+slide-10:start_point[i]+slide+10]
+        # delete unused rows from features_new
+        #features_clip = np.delete(features_clip, np.s_[seq_range_clip[n_sequence]:], 0)
+    else:
+        features_clip = features
+        seq_range_clip = seq_range
+
+# use means and variances to replace original features
+    feat_mu_sigma = np.zeros((n_sequence, 2*6))
+    for i in range(n_sequence):
+        feat_mu_sigma[i, 0:6] = np.mean(features_clip[seq_range_clip[i]:seq_range_clip[i+1]], axis=0)
+        feat_mu_sigma[i, 6:] = np.var(features_clip[seq_range_clip[i]:seq_range_clip[i + 1]], axis=0)
+
+# return value
+    return feat_mu_sigma
+
+
+def features_from_single_dataset(filename, dataset, slide: int=0):
+
+    """
+    function create_clip_extract_features(filename, slot='1s')
+
+    :param
+        filename(str: 'rightlc', 'leftlc' or 'lk'): filename of the .csv file
+        window_size(int): how long of the procedure is preserved in the training set
+
+    :return
+        features(array: n_samples * n_features): n_samples = n_sequence * time steps inside each sequence
+
+    """
+
+# open .csv file, store all the data in rows(list)
+    with open(filename+'_'+dataset+'.csv', newline='', encoding='utf-8-sig') as csvfile:
+        # read .csv file
+        reader = csv.reader(csvfile)
+        # store data in rows
+        rows = [row for row in reader]
+    csvfile.close()
+
+# extract n_sequences, store in sequence+'i'
+    # headings(list): categories of the data (omit veh_id)
+    headings = rows[0][1:]
+    # n_sequence(int): total number of sequences
+    n_sequence = int(rows[-1][0])
+    # initialize length
+    length = np.zeros((n_sequence,), dtype=int)
+# extract n_sequence_1 from file_1
+    # veh_num(int): count the number of vehicles (sequences)
+    veh_num = 1
+    # globals()[]: a way to combine string and variables in a variable name
+    seq = 'sequence_' + str(1)
+    globals()[seq] = []
+    # store data in sequence/label_seq+'i', whose type is going to be converted from list to ndarray
+    for row in rows[1:]:
+        # store data which come from one sequence
+        if row[0] == str(veh_num):
+            globals()[seq].append(row[1:])
+            # length(array: n_sequence,) counts the time steps in one sequence
+            length[veh_num-1] = length[veh_num-1] + 1
+        # detect changes on sequence (veh_id), initialize a new array and then write data
+        else:
+            globals()[seq] = np.array(globals()[seq], dtype=float)
+            seq = 'sequence_' + row[0]
+            veh_num = veh_num + 1
+            globals()[seq] = []
+            globals()[seq].append(row[1:])
+            length[veh_num-1] = length[veh_num-1] + 1
+    # convert the type of sequence+'i' from list to array
+    globals()[seq] = np.array(globals()[seq], dtype=float)
+
+# extract features
+    # features(array: number of total sequences*number of categories)
+    features = np.empty((np.sum(length), 6))
+    # seq_range(array: n_sequence+1,): each element represent the start row of each sequence in the feature vector
+    seq_range = np.zeros((n_sequence + 1,), dtype=int)
+    for i in range(1, np.size(length, 0)+1):
+        seq = 'sequence_' + str(i)
+        features[seq_range[i-1]:seq_range[i-1]+length[i-1]] = globals()[seq][:]
+        seq_range[i] = np.array([np.sum(length[:i])])
+
+# label the features by states
+    # initialize label(array: n_samples,)
+    label = np.zeros((np.sum(length[:]),), dtype=int)
+    # label lane keeping features
+    # features[3]: target_acc_y, min(features[3,seq:seq+15])>0.4: acc is higher than 0.4 m/s^2 for 1.5 second in a row
+    # 0: normal driving; 1: acceleration; 2: deceleration
+    if 'lk' in filename:
+        # lk class only contains one state
+        label[:] = 0
+    # label the left lane changes
+    # features[4]: ref_heading < -0.2, features[5]: yaw_rate <0/>0
+    # 0: normal driving; 1: steer to left; 2: steer back
+    elif 'leftlc' in filename:
+        seq = 0
+        while seq < np.sum(length):
+            n = 1
+            # heading angle is larger than 0.2
+            while max(features[seq:seq + n, 4]) < -0.2 and max(features[seq:seq + n, 5]) < 0 and seq + n < np.sum(length):
+                n = n + 1
+            # the features all belong to sequence i
+            for i in range(np.size(length, 0)):
+                if seq_range[i] <= seq < seq_range[i + 1]:
+                    break
+            # if the heading angle is less than 0.2 for 0.6 second in a row, this period will be labelled as steer
+            if n > 6 and seq >= seq_range[i] + 10:
+                if seq + n >= seq_range[i + 1]:
+                    n = seq_range[i + 1] - 1 - seq
+                if n == 0:
+                    seq = seq + 1
+                else:
+                    label[seq:seq + n] = 1
+                    seq = seq + n
+            else:
+                seq = seq + 1
+        seq = 0
+        while seq < np.sum(length):
+            n = 1
+            # heading angle is larger than 0.2
+            while max(features[seq:seq + n, 4]) < -0.2 and min(features[seq:seq + n, 5]) > 0 and seq + n < np.sum(length):
+                n = n + 1
+            # the features all belong to sequence i
+            # if the heading angle is less than 0.2 for 0.6 second in a row, this period will be labelled as steer back
+            if n > 6:
+                for i in range(np.size(length, 0)):
+                    if seq_range[i] <= seq < seq_range[i + 1]:
+                        if seq + n >= seq_range[i + 1]:
+                            n = seq_range[i + 1] - 1 - seq
+                        break
+                if n == 0:
+                    seq = seq + 1
+                else:
+                    label[seq:seq + n] = 2
+                    seq = seq + n
+            else:
+                seq = seq + 1
+        # label the right lane changes
+        # features[4]: ref_heading > 0.2, features[5]: yaw_rate >0/<0
+        # 0: normal driving; 1: steer to right; 2: steer back
+    elif 'rightlc' in filename:
+        seq = 0
+        while seq < np.sum(length):
+            n = 1
+            # heading angle is larger than 0.2
+            while min(features[seq:seq+n, 4]) > 0.2 and min(features[seq:seq+n, 5]) > 0 and seq + n < np.sum(length):
+                n = n + 1
+            # the features all belong to sequence i
+            for i in range(np.size(length, 0)):
+                if seq_range[i] <= seq < seq_range[i + 1]:
+                    break
+            # if the heading angle is less than 0.2 for 0.6 second in a row, this period will be labelled as steer
+            if n > 6 and seq >= seq_range[i] + 10:
+                if seq + n >= seq_range[i + 1]:
+                    n = seq_range[i + 1] - 1 - seq
+                if n == 0:
+                    seq = seq + 1
+                else:
+                    label[seq:seq + n] = 1
+                    seq = seq + n
+            else:
+                seq = seq + 1
+        seq = 0
+        while seq < np.sum(length):
+            n = 1
+            # heading angle is larger than 0.2
+            while min(features[seq:seq+n, 4]) > 0.2 and max(features[seq:seq+n, 5]) < 0 and seq + n < np.sum(length):
+                n = n + 1
+            # the features all belong to sequence i
+            # if the heading angle is less than 0.2 for 0.6 second in a row, this period will be labelled as steer back
+            if n > 6:
+                for i in range(np.size(length, 0)):
+                    if seq_range[i] <= seq < seq_range[i + 1]:
+                        if seq + n >= seq_range[i + 1]:
+                            n = seq_range[i + 1] - 1 - seq
+                        break
+                if n == 0:
+                    seq = seq + 1
+                else:
+                    label[seq:seq + n] = 2
+                    seq = seq + n
+            else:
+                seq = seq + 1
+
+# clip the lane change/keeping procedures
+    # lk class and the whole process do not need to be clipped
+    if filename != 'lk':
+        # initialize variables
+        start_point = np.zeros((n_sequence,), dtype=int)
+        seq_range_clip = np.zeros((n_sequence + 1,), dtype=int)
+        features_clip = np.zeros((20 * n_sequence, np.size(features, 1)))
+        # find start point, extract part of the features and labels, update new seq_range
+        for i in range(n_sequence):
+            start = seq_range[i]
+            stop = seq_range[i + 1]
+            # find the start point by labels
+            start_point[i] = np.argwhere(label[start:stop] == 1)[0] + seq_range[i]
+            # extract features and labels
+            seq_range_clip[i + 1] = seq_range_clip[i] + 20
+            features_clip[seq_range_clip[i]:seq_range_clip[i+1]] = features[start_point[i]+slide-10:start_point[i]+slide-10]
         # delete unused rows from features_new
         #features_clip = np.delete(features_clip, np.s_[seq_range_clip[n_sequence]:], 0)
     else:
